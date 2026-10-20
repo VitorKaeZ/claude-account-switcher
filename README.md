@@ -60,7 +60,13 @@ ccswap auto --once --dry-run      # uma checagem, sem trocar (cron/systemd)
 
 Regras: só troca se a outra conta estiver **abaixo** do limite e pelo menos
 `--margin` (10) pontos melhor que a atual — evita ping-pong; e respeita um
-`--cooldown` de 5 min entre trocas. Códigos de saída do `--once`:
+`--cooldown` de 5 min entre trocas.
+
+Se **todas** as contas estiverem no limite, ele vai para a que libera
+primeiro, ou seja, a que vai voltar a ficar abaixo do limite mais cedo.
+Uma conta só libera quando todas as janelas acima do limite resetam, então
+uma com o 5h resetando em 1h mas o 7d em 97% conta pelo reset do 7d. Se a
+ativa já é a que libera primeiro, nada muda. Códigos de saída do `--once`:
 `0` trocou · `1` erro · `2` nada a fazer · `3` sem conta alternativa viável.
 
 Como serviço (sobe no login, reinicia sozinho):

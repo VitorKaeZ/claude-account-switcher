@@ -446,6 +446,38 @@ def worst_pct(usage: dict | None, models: list[str]) -> float | None:
     return win[1] if win else None
 
 
+def parse_iso(iso: str | None) -> datetime | None:
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+    except (ValueError, TypeError):
+        return None
+
+
+def available_at(usage: dict | None, models: list[str], threshold: float) -> datetime | None:
+    """Quando a conta volta a ficar abaixo do limite.
+
+    Uma conta só libera quando TODAS as janelas acima do limite resetam, então
+    vale o reset mais tardio entre elas. Sem janela acima do limite, já está
+    livre (agora). None quando não dá para saber (sem leitura ou sem horário).
+    """
+    if not usage:
+        return None
+    wins = [(usage[k]["pct"], usage[k].get("resets_at")) for k in ("5h", "7d") if k in usage]
+    wanted = {m.lower() for m in models}
+    if wanted:
+        for sc in usage.get("scoped", []):
+            if "all" in wanted or sc["name"].lower() in wanted:
+                wins.append((sc["pct"], sc.get("resets_at")))
+    blocking = [parse_iso(r) for p, r in wins if p >= threshold]
+    if not blocking:
+        return datetime.now().astimezone()
+    if any(b is None for b in blocking):
+        return None
+    return max(b for b in blocking if b is not None)
+
+
 def fmt_reset(iso: str | None) -> str:
     if not iso:
         return ""
@@ -711,10 +743,12 @@ def cmd_auto(args) -> int:
             return "nada"
 
         best, best_pct = None, None
+        others: dict[int, dict | None] = {}
         for num, slot in slots_now.items():
             if num == active:
                 continue
             u, w = usage_for_slot(num, slot, models)
+            others[num] = u
             cand = worst_window(u, models)
             if cand is None:
                 log(f"  slot {num} ({slot_email(slot)}): sem leitura ({w})")
@@ -725,8 +759,25 @@ def cmd_auto(args) -> int:
                 best, best_pct = num, p
 
         if best is None:
-            log(f"{label}: {win} em {pct:.1f}% — nenhuma conta alternativa com folga")
-            return "bloqueado"
+            # Todas esgotadas: fica na que libera primeiro, para a troca
+            # automática voltar a ter folga o quanto antes.
+            soonest = soonest_release(active, usage, others, models, threshold, log)
+            if soonest is None:
+                log(f"{label}: {win} em {pct:.1f}% — nenhuma conta alternativa com folga")
+                return "bloqueado"
+            target, when = soonest
+            quando = f"{when:%d/%m %H:%M}"
+            if args.dry_run:
+                log(f"[dry-run] todas esgotadas — trocaria para "
+                    f"{slot_email(slots_now[target])}, que libera em {quando}")
+                return "trocado"
+            do_switch(target, slots_now,
+                      reason=f"todas esgotadas — esta libera primeiro ({quando})")
+            notify(
+                f"Claude: troquei para {slot_email(slots_now[target])}",
+                f"Todas as contas no limite; esta libera primeiro, às {quando}",
+            )
+            return "trocado"
 
         if args.dry_run:
             log(f"[dry-run] trocaria para {slot_email(slots_now[best])} ({best_pct:.1f}%)")
@@ -753,6 +804,37 @@ def cmd_auto(args) -> int:
     except KeyboardInterrupt:
         log("encerrado")
     return 0
+
+
+def soonest_release(
+    active: int,
+    active_usage: dict | None,
+    others: dict[int, dict | None],
+    models: list[str],
+    threshold: float,
+    log,
+) -> tuple[int, datetime] | None:
+    """Com todas as contas no limite, a outra conta que libera antes da ativa.
+
+    Devolve (slot, quando) ou None se a ativa já é a que libera primeiro
+    (ou se não dá para saber de nenhuma).
+    """
+    mine = available_at(active_usage, models, threshold)
+    log(f"  todas no limite — a ativa libera em {mine:%d/%m %H:%M}" if mine
+        else "  todas no limite — horário de liberação da ativa desconhecido")
+    best: tuple[int, datetime] | None = None
+    for num, u in others.items():
+        when = available_at(u, models, threshold)
+        if when is None:
+            continue
+        log(f"  slot {num} libera em {when:%d/%m %H:%M}")
+        if best is None or when < best[1]:
+            best = (num, when)
+    if best is None:
+        return None
+    if mine is not None and mine <= best[1]:
+        return None
+    return best
 
 
 def notify(title: str, body: str) -> None:
