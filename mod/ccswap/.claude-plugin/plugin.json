@@ -1,0 +1,32 @@
+{
+  "name": "ccswap",
+  "version": "0.1.0",
+  "description": "Mostra o uso das contas do ccswap acima do prompt, adiciona /conta e troca sozinho perto do limite",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "ccswapPath": {
+      "type": "string",
+      "title": "Caminho do ccswap",
+      "description": "Comando ou caminho absoluto do ccswap (um .py roda com python3)",
+      "default": "ccswap"
+    },
+    "autoSwitch": {
+      "type": "boolean",
+      "title": "Troca automática",
+      "description": "Roda `ccswap auto --once` ao fim de um turno quando a conta ativa passa do limite",
+      "default": false
+    },
+    "threshold": {
+      "type": "number",
+      "title": "Limite (%)",
+      "description": "Uso da pior janela (5h ou 7d) que dispara a troca automática",
+      "default": 95
+    },
+    "refreshMinutes": {
+      "type": "number",
+      "title": "Atualizar a faixa a cada (min)",
+      "description": "Intervalo para reler o uso de todas as contas",
+      "default": 5
+    }
+  }
+}

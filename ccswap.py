@@ -620,6 +620,26 @@ def cmd_list(args) -> int:
     active = find_active_slot(slots)
     models = [m for m in (args.model or "").split(",") if m]
 
+    if args.json:
+        rows = []
+        for num, slot in slots.items():
+            row = {
+                "slot": num,
+                "email": slot_email(slot),
+                "alias": slot.get("alias", ""),
+                "active": num == active,
+                "usage": None,
+                "error": None,
+            }
+            if not args.no_usage:
+                usage, why = usage_for_slot(num, slot, models)
+                row["usage"] = usage
+                if not usage:
+                    row["error"] = why
+            rows.append(row)
+        print(json.dumps(rows, ensure_ascii=False))
+        return 0
+
     for num, slot in slots.items():
         mark = "→" if num == active else " "
         alias = f" [{slot['alias']}]" if slot.get("alias") else ""
@@ -817,6 +837,7 @@ def main(argv: list[str]) -> int:
     li = sub.add_parser("list", help="lista as contas com uso 5h/7d")
     li.add_argument("--model", help="também mostra limites semanais por modelo (ex: Fable)")
     li.add_argument("--no-usage", action="store_true", help="não consulta a API")
+    li.add_argument("--json", action="store_true", help="saída em JSON (usada pelo mod)")
     li.set_defaults(func=cmd_list)
 
     st = sub.add_parser("status", help="mostra a conta ativa")

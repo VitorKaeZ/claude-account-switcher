@@ -92,6 +92,47 @@ próprio Claude (CLI e VS Code), sem precisar ir ao terminal:
 /trocar-conta 1          # por slot, e-mail ou apelido
 ```
 
+### Mod do Claude Code
+
+`mod/ccswap/` é um mod (Claude Code v2.1.287+) que usa o `ccswap` por baixo:
+
+- **faixa acima do prompt** com cada conta e o uso 5h / 7d, em verde,
+  amarelo ou vermelho (relida a cada 5 min e depois de cada troca);
+- **`/conta`**, que roda na hora, sem gastar turno e mesmo com o Claude
+  trabalhando:
+
+  ```
+  /conta              # lista as contas com uso
+  /conta proxima      # vai para a próxima
+  /conta melhor       # vai para a de maior folga
+  /conta 2            # por slot, e-mail ou apelido
+  /conta auto         # uma checagem do auto agora
+  /conta ocultar      # esconde a faixa (/conta mostrar traz de volta)
+  ```
+
+- **troca automática** (desligada por padrão): ao fim de cada turno, se a
+  pior janela da conta ativa passou do limite, roda `ccswap auto --once` —
+  com o mesmo cooldown e a mesma margem do serviço — e avisa num toast.
+
+A troca em si continua no `ccswap.py`: a API de arquivos dos mods não tem
+`mkdir`, `rmdir` nem `chmod`, então os locks e os slots `0600` ficam com ele.
+O mod só precisa do `ccswap` no `PATH` (ou do caminho absoluto nas opções).
+
+Instalar:
+
+```
+/plugin marketplace add VitorKaeZ/claude-account-switcher
+/plugin install ccswap@ccswap
+```
+
+As opções (caminho do `ccswap`, troca automática, limite, intervalo) aparecem
+no `/plugin` → aba **Installed** → ccswap. O timer e o gatilho só rodam com
+uma sessão aberta, então mantenha o `ccswap service` se quiser cobertura o
+tempo todo; com os dois ligados, o cooldown evita trocas em dobro. No VS Code
+os hooks rodam, mas a faixa não aparece — use `/conta`.
+
+Testes do mod: `claude plugin test mod/ccswap`.
+
 ## Onde ficam os dados
 
 `~/.local/share/ccswap/` (modo `0700`):

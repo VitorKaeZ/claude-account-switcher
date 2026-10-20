@@ -1,0 +1,11 @@
+{
+  "name": "ccswap",
+  "owner": { "name": "VitorKaeZ" },
+  "plugins": [
+    {
+      "name": "ccswap",
+      "source": "./mod/ccswap",
+      "description": "Faixa com o uso das contas, comando /conta e troca automática pelo ccswap"
+    }
+  ]
+}
