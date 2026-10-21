@@ -108,21 +108,36 @@ próprio Claude (CLI e VS Code), sem precisar ir ao terminal:
 
 `mod/ccswap/` é um mod (Claude Code v2.1.287+) que usa o `ccswap` por baixo:
 
-- **faixa acima do prompt** com cada conta e o uso 5h / 7d, em verde,
-  amarelo ou vermelho (relida a cada 5 min e depois de cada troca);
+- **linha de status** embaixo do rodapé, com cada conta, a pior janela e em
+  quanto tempo ela reseta quando passa de 75%:
+  `ccswap: → vitorkaez ▰▰▱▱▱ 40%  gabrielfpl40 ▰▰▰▰▱ 80% ↻3h30`. A faixa
+  acima do prompt fica livre para outros mods (o savvy-progress usa ela);
+- **painel Contas** na barra lateral (`/conta painel` abre e fecha): barras
+  5h / 7d em verde, amarelo ou vermelho, um botão `usar` em cada conta
+  inativa e `próxima`, `melhor`, `auto` e `atualizar` no pé. Com o painel
+  focado, os atalhos são o número do slot, `p`, `m`, `a` e `r`. Abre sozinho
+  no início da sessão com a opção *Abrir o painel ao iniciar*;
+- o uso é relido a cada 5 min e depois de cada troca; a conta ativa é
+  conferida a cada minuto sem consultar a API, então uma troca do
+  `ccswap service` aparece logo. Quando a API de uso falha (HTTP 429), o mod
+  mantém a última leitura (`~`) e, para a conta da sessão, usa os limites que
+  as próprias respostas do Claude trazem (`•`);
 - **`/conta`**, que roda na hora, sem gastar turno e mesmo com o Claude
   trabalhando:
 
   ```
   /conta              # lista as contas com uso
+  /conta painel       # abre ou fecha o painel
   /conta proxima      # vai para a próxima
   /conta melhor       # vai para a de maior folga
   /conta 2            # por slot, e-mail ou apelido
   /conta auto         # uma checagem do auto agora
-  /conta ocultar      # esconde a faixa (/conta mostrar traz de volta)
+  /conta ocultar      # esconde a linha de status (/conta mostrar traz de volta)
   ```
 
-- **troca automática** (desligada por padrão): ao fim de cada turno, se a
+  Depois de `/conta ` o autocomplete sugere os subcomandos e as contas.
+
+- **troca automática** (desligada por padrão): a cada resposta, se a
   pior janela da conta ativa passou do limite, roda `ccswap auto --once` —
   com o mesmo cooldown e a mesma margem do serviço — e avisa num toast.
 
@@ -137,11 +152,13 @@ Instalar:
 /plugin install ccswap@ccswap
 ```
 
-As opções (caminho do `ccswap`, troca automática, limite, intervalo) aparecem
+As opções (caminho do `ccswap`, troca automática, limite, intervalo, painel) aparecem
 no `/plugin` → aba **Installed** → ccswap. O timer e o gatilho só rodam com
 uma sessão aberta, então mantenha o `ccswap service` se quiser cobertura o
 tempo todo; com os dois ligados, o cooldown evita trocas em dobro. No VS Code
-os hooks rodam, mas a faixa não aparece — use `/conta`.
+os hooks rodam, mas a linha de status e o painel não aparecem — use `/conta`.
+O painel lateral precisa do layout em tela cheia (`/tui fullscreen`) e de um
+terminal com 110 colunas ou mais; abaixo disso ele aparece acima do prompt.
 
 Testes do mod: `claude plugin test mod/ccswap`.
 
