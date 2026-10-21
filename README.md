@@ -62,11 +62,17 @@ Regras: só troca se a outra conta estiver **abaixo** do limite e pelo menos
 `--margin` (10) pontos melhor que a atual — evita ping-pong; e respeita um
 `--cooldown` de 5 min entre trocas.
 
-Se **todas** as contas estiverem no limite, ele vai para a que libera
-primeiro, ou seja, a que vai voltar a ficar abaixo do limite mais cedo.
-Uma conta só libera quando todas as janelas acima do limite resetam, então
-uma com o 5h resetando em 1h mas o 7d em 97% conta pelo reset do 7d. Se a
-ativa já é a que libera primeiro, nada muda. Códigos de saída do `--once`:
+Se **todas** as contas passaram do limite, acima do limite ainda não é sem
+cota (98% atende, 100% não):
+
+1. a ativa ainda tem cota (abaixo de 100%): fica nela;
+2. a ativa chegou a 100%: vai para a outra que ainda tem cota, a de menor uso;
+3. todas em 100%: vai para a que libera primeiro. Uma conta só libera quando
+   todas as janelas em 100% resetam, então uma com o 5h resetando em 1h mas o
+   7d em 100% conta pelo reset do 7d. Se a ativa já é a que libera primeiro,
+   nada muda.
+
+Códigos de saída do `--once`:
 `0` trocou · `1` erro · `2` nada a fazer · `3` sem conta alternativa viável.
 
 Como serviço (sobe no login, reinicia sozinho):
