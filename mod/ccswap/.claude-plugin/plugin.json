@@ -1,7 +1,7 @@
 {
   "name": "ccswap",
-  "version": "0.1.0",
-  "description": "Mostra o uso das contas do ccswap acima do prompt, adiciona /conta e troca sozinho perto do limite",
+  "version": "0.2.0",
+  "description": "Mostra o uso das contas do ccswap na linha de status e num painel com botões, adiciona /conta e troca sozinho perto do limite",
   "types": "./types/index.d.ts",
   "userConfig": {
     "ccswapPath": {
@@ -13,7 +13,7 @@
     "autoSwitch": {
       "type": "boolean",
       "title": "Troca automática",
-      "description": "Roda `ccswap auto --once` ao fim de um turno quando a conta ativa passa do limite",
+      "description": "Roda `ccswap auto --once` depois de uma resposta quando a conta ativa passa do limite",
       "default": false
     },
     "threshold": {
@@ -24,9 +24,15 @@
     },
     "refreshMinutes": {
       "type": "number",
-      "title": "Atualizar a faixa a cada (min)",
+      "title": "Atualizar o uso a cada (min)",
       "description": "Intervalo para reler o uso de todas as contas",
       "default": 5
+    },
+    "paneAtStart": {
+      "type": "boolean",
+      "title": "Abrir o painel ao iniciar",
+      "description": "Abre o painel Contas na barra lateral quando a sessão começa; desligado, só com /conta painel",
+      "default": false
     }
   }
 }

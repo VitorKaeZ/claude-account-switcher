@@ -51,6 +51,7 @@ LOCK_TIMEOUT = 9.0
 DEFAULT_THRESHOLD = 95.0
 DEFAULT_INTERVAL = 60
 DEFAULT_COOLDOWN = 300.0
+HARD_LIMIT = 100.0  # a partir daqui a janela barra de vez
 DEFAULT_MARGIN = 10.0  # histerese: o alvo precisa estar X pontos melhor
 
 # ---------------------------------------------------------------------------
@@ -759,9 +760,32 @@ def cmd_auto(args) -> int:
                 best, best_pct = num, p
 
         if best is None:
-            # Todas esgotadas: fica na que libera primeiro, para a troca
-            # automática voltar a ter folga o quanto antes.
-            soonest = soonest_release(active, usage, others, models, threshold, log)
+            # Acima do limite não quer dizer sem cota: 98% ainda atende, 100%
+            # não. Enquanto a ativa tem cota, fica; sem cota, vai para a outra
+            # que ainda tem, a de menor uso.
+            if pct < HARD_LIMIT:
+                log(f"{label}: {win} em {pct:.1f}% — nenhuma outra abaixo de {threshold:.0f}%, "
+                    f"mas a ativa ainda tem cota — mantendo")
+                return "bloqueado"
+            usable = {num: p for num, u in others.items()
+                      if (p := worst_pct(u, models)) is not None and p < HARD_LIMIT}
+            if usable:
+                target = min(usable, key=lambda num: usable[num])
+                if args.dry_run:
+                    log(f"[dry-run] ativa esgotada — trocaria para "
+                        f"{slot_email(slots_now[target])} ({usable[target]:.1f}%)")
+                    return "trocado"
+                do_switch(target, slots_now,
+                          reason=f"{label} esgotada — esta ainda tem cota ({usable[target]:.1f}%)")
+                notify(
+                    f"Claude: troquei para {slot_email(slots_now[target])}",
+                    f"{label} esgotou a janela de {win}; esta ainda tem cota",
+                )
+                return "trocado"
+
+            # Todas esgotadas de verdade: fica na que libera primeiro, para a
+            # troca automática voltar a ter folga o quanto antes.
+            soonest = soonest_release(active, usage, others, models, HARD_LIMIT, log)
             if soonest is None:
                 log(f"{label}: {win} em {pct:.1f}% — nenhuma conta alternativa com folga")
                 return "bloqueado"
