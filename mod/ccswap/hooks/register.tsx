@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { Account, ShownAccount, Usage, Window } from '../types'
+import type { Account, Profiles, ShownAccount, Usage, Window } from '../types'
 
 // A troca em si (locks do proper-lockfile, slots 0600, refresh de token)
 // continua no ccswap.py: a API de arquivos dos mods não tem mkdir, rmdir nem
@@ -13,6 +13,7 @@ const liveUsage = atom({ plugin: 'ccswap', key: 'liveUsage' } as const, null)
 const lastError = atom({ plugin: 'ccswap', key: 'lastError' } as const, null)
 const isHidden = atom({ plugin: 'ccswap', key: 'isHidden' } as const, false)
 const lastAction = atom({ plugin: 'ccswap', key: 'lastAction' } as const, null)
+const profiles = atom({ plugin: 'ccswap', key: 'profiles' } as const, null)
 
 const PANE_ID = 'ccswap'
 const PANE_TITLE = 'Contas'
@@ -22,12 +23,16 @@ const ACTIVE_CHECK_EVERY_MS = 60_000
 const WARNING_PCT = 75
 const WINDOWS = ['5h', '7d'] as const
 const STATUS_BAR_CELLS = 5
+// O ccswap guarda o uso num cache compartilhado; leitura mais velha que isso
+// aparece como "última leitura".
+const STALE_USAGE_S = 300
 
 const SUBCOMMANDS = [
   { text: 'painel', description: 'abre ou fecha o painel com as barras e os botões' },
   { text: 'proxima', description: 'troca para a próxima conta' },
   { text: 'melhor', description: 'troca para a conta com mais folga' },
   { text: 'auto', description: 'troca só se a ativa passou do limite' },
+  { text: 'perfil', description: 'lista os perfis; `perfil <nome>` ativa, `perfil off` desliga' },
   { text: 'ocultar', description: 'esconde a linha de status' },
   { text: 'mostrar', description: 'mostra a linha de status' },
 ]
@@ -49,7 +54,9 @@ async function ccswap($: EngineInterface, args: string[], timeoutMs = 60_000): P
 // Uma leitura que falhou (429 é comum) não apaga a anterior da mesma conta.
 function mergeWithPrevious(fresh: Account[], previous: ShownAccount[] | null, withUsage: boolean): ShownAccount[] {
   return fresh.map(account => {
-    if (withUsage && account.usage) return { ...account, usageSource: 'api' }
+    if (withUsage && account.usage) {
+      return { ...account, usageSource: (account.usage_age ?? 0) > STALE_USAGE_S ? 'cache' : 'api' }
+    }
     const old = previous?.find(p => p.email === account.email)
     if (old?.usage) return { ...account, usage: old.usage, usageSource: withUsage ? 'cache' : old.usageSource }
     return { ...account, usageSource: null }
@@ -57,7 +64,10 @@ function mergeWithPrevious(fresh: Account[], previous: ShownAccount[] | null, wi
 }
 
 async function refresh($: EngineInterface, withUsage = true): Promise<ShownAccount[] | null> {
-  const r = await ccswap($, withUsage ? ['list', '--json'] : ['list', '--json', '--no-usage'])
+  const [r] = await Promise.all([
+    ccswap($, withUsage ? ['list', '--json'] : ['list', '--json', '--no-usage']),
+    refreshProfiles($),
+  ])
   if (r.exitCode !== 0) {
     await update($, lastError, () => r.stderr || `ccswap saiu com ${r.exitCode}`)
     await syncStatus($)
@@ -77,6 +87,18 @@ async function refresh($: EngineInterface, withUsage = true): Promise<ShownAccou
   await update($, lastError, () => null)
   await syncStatus($)
   return merged
+}
+
+async function refreshProfiles($: EngineInterface) {
+  const r = await ccswap($, ['profile', '--json'])
+  let parsed: Profiles | null = null
+  try {
+    const data = JSON.parse(r.stdout) as Profiles
+    if (r.exitCode === 0 && data && typeof data.profiles === 'object') parsed = data
+  } catch {
+    // ccswap antigo, sem perfis
+  }
+  await update($, profiles, () => parsed)
 }
 
 async function afterSwitch($: EngineInterface) {
@@ -213,7 +235,13 @@ function shortName(a: ShownAccount): string {
 
 // A linha de status só aceita texto: cada conta com a pior janela, para as
 // contas caberem lado a lado.
-function statusLine(list: ShownAccount[], live: Usage | null, now: number, error: string | null): string {
+function statusLine(
+  list: ShownAccount[],
+  live: Usage | null,
+  now: number,
+  error: string | null,
+  profile: string | null,
+): string {
   const parts = list.map(a => {
     const { usage, source } = shownUsage(a, live)
     const worst = worstWindow(usage)
@@ -222,15 +250,17 @@ function statusLine(list: ShownAccount[], live: Usage | null, now: number, error
     const resetIn = worst.pct >= WARNING_PCT ? formatIn(worst.resets_at, now) : null
     return `${a.active ? '→ ' : ''}${shortName(a)} ${full}${empty} ${worst.pct.toFixed(0)}%${resetIn ? ` ↻${resetIn}` : ''}${SOURCE_MARK[source ?? ''] ?? ''}`
   })
-  return `ccswap: ${parts.join('  ')}${error ? '  ⚠ ccswap não respondeu' : ''}`
+  // O Claude Code já desenha o nome do mod na frente da linha.
+  return `${profile ? `[${profile}] ` : ''}${parts.join('  ')}${error ? '  ⚠ ccswap não respondeu' : ''}`
 }
 
 async function syncStatus($: EngineInterface) {
   const list = await read($, accounts)
   const error = await read($, lastError)
   if (await read($, isHidden)) return $.ui.status(undefined)
-  if (!list || list.length === 0) return $.ui.status(error ? `ccswap: ${error}` : undefined)
-  $.ui.status(statusLine(list, await read($, liveUsage), await $.clock.now(), error))
+  if (!list || list.length === 0) return $.ui.status(error ?? undefined)
+  const profile = (await read($, profiles))?.active ?? null
+  $.ui.status(statusLine(list, await read($, liveUsage), await $.clock.now(), error, profile))
 }
 
 const RELOAD_HINT =
@@ -255,7 +285,7 @@ export const register: Register = (on, options) => {
       await $.command.register({
         name: 'conta',
         description: 'Contas do ccswap: lista, painel, troca (próxima, melhor, slot, apelido ou e-mail)',
-        argumentHint: '[painel|proxima|melhor|auto|<slot>|ocultar|mostrar]',
+        argumentHint: '[painel|proxima|melhor|auto|perfil [nome|off]|<slot>|ocultar|mostrar]',
         immediate: true,
       })
     } catch (err) {
@@ -267,6 +297,19 @@ export const register: Register = (on, options) => {
 
   on('prompt.autocomplete', async ($, e, next) => {
     const result = await next(e)
+    const profilePrefix = '/conta perfil '
+    if (e.text.startsWith(profilePrefix) && e.start === profilePrefix.length) {
+      const known = await read($, profiles)
+      const typed = e.token.toLowerCase()
+      const options = [
+        ...Object.entries(known?.profiles ?? {}).map(([name, slots]) => ({
+          text: name,
+          description: `contas ${slots.join(', ')}${known?.active === name ? ' (ativo)' : ''}`,
+        })),
+        { text: 'off', description: 'volta a usar todas as contas' },
+      ].filter(o => o.text.toLowerCase().startsWith(typed) && o.text.toLowerCase() !== typed)
+      return { suggestions: [...result.suggestions, ...options] }
+    }
     const prefix = '/conta '
     if (!e.text.startsWith(prefix) || e.start !== prefix.length) return result
 
@@ -292,6 +335,20 @@ export const register: Register = (on, options) => {
     }
 
     if (arg === 'painel' || arg === 'panel') return { text: await togglePane($) }
+
+    if (arg === 'perfil' || arg.startsWith('perfil ')) {
+      const name = e.args.trim().slice('perfil'.length).trim()
+      if (!name) {
+        const r = await ccswap($, ['profile'])
+        return { text: r.exitCode === 0 ? r.stdout : r.stderr || `ccswap saiu com ${r.exitCode}` }
+      }
+      const r = await ccswap($, name.toLowerCase() === 'off' ? ['profile', 'off'] : ['profile', 'use', name])
+      const isSwitched = r.stdout.includes('agora em')
+      if (isSwitched) await afterSwitch($)
+      else await refresh($, false)
+      if (r.exitCode !== 0) return { text: r.stderr || `ccswap saiu com ${r.exitCode}` }
+      return { text: isSwitched ? `${r.stdout}\n${RELOAD_HINT}` : r.stdout }
+    }
 
     if (arg === '' || arg === 'lista' || arg === 'list') {
       const list = await refresh($)
@@ -349,6 +406,7 @@ export const register: Register = (on, options) => {
     const error = await read($, lastError)
     const live = await read($, liveUsage)
     const action = await read($, lastAction)
+    const profile = (await read($, profiles))?.active ?? null
     const now = await $.clock.now()
     const cells = e.props.bodyColumns >= 30 ? 10 : 8
 
@@ -363,6 +421,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column" rowGap="sm">
+        {profile ? <Text dimColor>perfil {profile}</Text> : null}
         {list.map(a => {
           const { usage, source } = shownUsage(a, live)
           return (

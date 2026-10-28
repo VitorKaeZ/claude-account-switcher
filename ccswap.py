@@ -54,6 +54,12 @@ DEFAULT_COOLDOWN = 300.0
 HARD_LIMIT = 100.0  # a partir daqui a janela barra de vez
 DEFAULT_MARGIN = 10.0  # histerese: o alvo precisa estar X pontos melhor
 
+# O endpoint de uso aceita ~1 leitura a cada 2 min por conta (medido; o
+# Retry-After do 429 vem 0). Serviço, mods e CLI dividem esse cache.
+USAGE_MIN_AGE = 150.0
+USAGE_MAX_STALE = 1800.0  # leitura mais velha que isso não vale como uso
+USAGE_MAX_BACKOFF = 1800.0  # cada 429 seguido dobra a espera até aqui
+
 # ---------------------------------------------------------------------------
 # Caminhos
 # ---------------------------------------------------------------------------
@@ -88,6 +94,14 @@ def slot_path(num: int) -> Path:
 
 def state_path() -> Path:
     return store_root() / "state.json"
+
+
+def profiles_path() -> Path:
+    return store_root() / "profiles.json"
+
+
+def usage_cache_path() -> Path:
+    return store_root() / "usage.json"
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +321,44 @@ def resolve_slot(slots: dict[int, dict], ref: str) -> int:
     die(f"conta não encontrada: {ref!r} (veja `ccswap list`)")
 
 
+def slot_label(slot: dict) -> str:
+    return slot.get("alias") or slot_email(slot)
+
+
+# ---------------------------------------------------------------------------
+# Perfis: grupos de contas; com um ativo, a troca só circula entre as dele
+# ---------------------------------------------------------------------------
+
+
+def load_profiles() -> dict[str, list[int]]:
+    data = read_json(profiles_path())
+    return {name: [int(n) for n in nums] for name, nums in data.items() if isinstance(nums, list)}
+
+
+def save_profiles(profiles: dict[str, list[int]]) -> None:
+    write_json_atomic(profiles_path(), profiles, mode=0o600)
+
+
+def active_profile() -> str | None:
+    name = read_json(state_path()).get("profile")
+    return name if name in load_profiles() else None
+
+
+def set_active_profile(name: str | None) -> None:
+    state = read_json(state_path())
+    state["profile"] = name
+    write_json_atomic(state_path(), state)
+
+
+def scoped_slots(slots: dict[int, dict]) -> dict[int, dict]:
+    """Os slots do perfil ativo; sem perfil, todos."""
+    name = active_profile()
+    if name is None:
+        return slots
+    members = set(load_profiles()[name])
+    return {num: slot for num, slot in slots.items() if num in members}
+
+
 # ---------------------------------------------------------------------------
 # API OAuth: refresh de token e consulta de uso
 # ---------------------------------------------------------------------------
@@ -400,6 +452,40 @@ def fetch_usage(access_token: str, timeout: float = 8.0) -> tuple[dict | None, s
     return (out or None), "ok"
 
 
+def read_usage(email: str, access_token: str) -> tuple[dict | None, str]:
+    """Uso da conta pelo cache compartilhado; só consulta a API quando a
+    última leitura passou de USAGE_MIN_AGE e não há 429 recente (a espera
+    dobra a cada 429 seguido). O ccremote lê e grava o mesmo arquivo.
+
+    O uso devolvido traz "read_at" (epoch da leitura). Se a consulta falha,
+    devolve a última leitura boa (até USAGE_MAX_STALE) com o motivo.
+    """
+    key = email.lower()
+    entry = read_json(usage_cache_path()).get(key) or {}
+    now = time.time()
+    is_blocked = now < entry.get("blocked_until", 0)
+    why = entry.get("error", "ok") if is_blocked else "ok"
+    if not is_blocked and now - entry.get("at", 0) >= USAGE_MIN_AGE:
+        usage, why = fetch_usage(access_token)
+        if usage:
+            entry = {"usage": usage, "at": now}
+        elif why == "HTTP 429":
+            strikes = entry.get("strikes", 0) + 1
+            wait = min(USAGE_MIN_AGE * 2 ** (strikes - 1), USAGE_MAX_BACKOFF)
+            entry = {**entry, "blocked_until": now + wait, "error": why, "strikes": strikes}
+        else:
+            return None, why
+        cache = read_json(usage_cache_path())
+        cache[key] = entry
+        write_json_atomic(usage_cache_path(), cache)
+        if usage:
+            return {**usage, "read_at": now}, "ok"
+
+    if entry.get("usage") and now - entry["at"] < USAGE_MAX_STALE:
+        return {**entry["usage"], "read_at": entry["at"]}, why
+    return None, why if why != "ok" else "sem leitura recente"
+
+
 def usage_for_slot(num: int, slot: dict, models: list[str]) -> tuple[dict | None, str]:
     """Uso de um slot, renovando o token guardado se preciso (e persistindo)."""
     oauth = slot.get("credentials", {})
@@ -413,13 +499,13 @@ def usage_for_slot(num: int, slot: dict, models: list[str]) -> tuple[dict | None
         save_slot(num, slot)
         oauth = new
 
-    usage, why = fetch_usage(oauth.get("accessToken", ""))
+    usage, why = read_usage(slot_email(slot), oauth.get("accessToken", ""))
     if usage is None and why.startswith("token recusado"):
         new, why2 = refresh_token(oauth)
         if new:
             slot["credentials"] = new
             save_slot(num, slot)
-            usage, why = fetch_usage(new.get("accessToken", ""))
+            usage, why = read_usage(slot_email(slot), new.get("accessToken", ""))
     return usage, why
 
 
@@ -549,6 +635,9 @@ def cmd_remove(args) -> int:
     num = resolve_slot(slots, args.account)
     email = slot_email(slots[num])
     slot_path(num).unlink(missing_ok=True)
+    profiles = load_profiles()
+    if any(num in nums for nums in profiles.values()):
+        save_profiles({name: [n for n in nums if n != num] for name, nums in profiles.items()})
     print(f"✓ slot {num} ({email}) removido")
     return 0
 
@@ -603,6 +692,18 @@ def do_switch(target: int, slots: dict[int, dict], reason: str = "") -> None:
     print(f"✓ agora em {slot_email(slot)} (slot {target}){' — ' + reason if reason else ''}")
 
 
+def least_used_slot(slots: dict[int, dict], skip: int | None, models: list[str]) -> int | None:
+    best, best_pct = None, None
+    for num, slot in slots.items():
+        if num == skip:
+            continue
+        usage, _ = usage_for_slot(num, slot, models)
+        pct = worst_pct(usage, models)
+        if pct is not None and (best_pct is None or pct < best_pct):
+            best, best_pct = num, pct
+    return best
+
+
 def cmd_switch(args) -> int:
     slots = load_slots()
     if len(slots) < 2:
@@ -610,23 +711,19 @@ def cmd_switch(args) -> int:
     models = [m for m in (args.model or "").split(",") if m]
 
     if args.account:
+        # Pedida pelo nome, vale qualquer conta, mesmo fora do perfil ativo.
         target = resolve_slot(slots, args.account)
     else:
+        pool = scoped_slots(slots)
         active = find_active_slot(slots)
+        if len(pool) < 2 and active in pool:
+            die(f"o perfil {active_profile()!r} só tem esta conta")
         if args.best:
-            best, best_pct = None, None
-            for num, slot in slots.items():
-                if num == active:
-                    continue
-                usage, _ = usage_for_slot(num, slot, models)
-                pct = worst_pct(usage, models)
-                if pct is not None and (best_pct is None or pct < best_pct):
-                    best, best_pct = num, pct
-            if best is None:
+            target = least_used_slot(pool, active, models)
+            if target is None:
                 die("não consegui ler o uso de nenhuma outra conta")
-            target = best
         else:
-            nums = list(slots)
+            nums = list(pool)
             target = nums[(nums.index(active) + 1) % len(nums)] if active in nums else nums[0]
 
     do_switch(target, slots)
@@ -647,10 +744,12 @@ def cmd_status(args) -> int:
 
 
 def cmd_list(args) -> int:
-    slots = load_slots()
-    if not slots:
+    all_slots = load_slots()
+    if not all_slots:
         die("nenhuma conta cadastrada — rode `ccswap add` com cada conta logada")
-    active = find_active_slot(slots)
+    active = find_active_slot(all_slots)
+    slots = all_slots if args.all else scoped_slots(all_slots)
+    profile = active_profile()
     models = [m for m in (args.model or "").split(",") if m]
 
     if args.json:
@@ -667,12 +766,16 @@ def cmd_list(args) -> int:
             if not args.no_usage:
                 usage, why = usage_for_slot(num, slot, models)
                 row["usage"] = usage
-                if not usage:
+                if usage:
+                    row["usage_age"] = int(time.time() - usage["read_at"])
+                if why != "ok":
                     row["error"] = why
             rows.append(row)
         print(json.dumps(rows, ensure_ascii=False))
         return 0
 
+    if profile and not args.all:
+        print(f"perfil {profile} (`ccswap list --all` mostra todas)")
     for num, slot in slots.items():
         mark = "→" if num == active else " "
         alias = f" [{slot['alias']}]" if slot.get("alias") else ""
@@ -683,6 +786,9 @@ def cmd_list(args) -> int:
         if not usage:
             print(f"      uso indisponível: {why}")
             continue
+        age = time.time() - usage["read_at"]
+        if age >= USAGE_MIN_AGE:
+            print(f"      (leitura de {int(age // 60)}min atrás{'; ' + why if why != 'ok' else ''})")
         for key in ("5h", "7d"):
             if key in usage:
                 w = usage[key]
@@ -722,7 +828,7 @@ def cmd_auto(args) -> int:
         # A conta ativa é lida do arquivo vivo: é o Claude Code quem renova
         # esse token, então nunca o renovamos por baixo dele.
         oauth, _ = read_active()
-        usage, why = fetch_usage(oauth.get("accessToken", ""))
+        usage, why = read_usage(slot_email(slots_now[active]), oauth.get("accessToken", ""))
         window = worst_window(usage, models)
         if window is None:
             log(f"uso da conta ativa indisponível ({why}) — mantendo")
@@ -745,7 +851,7 @@ def cmd_auto(args) -> int:
 
         best, best_pct = None, None
         others: dict[int, dict | None] = {}
-        for num, slot in slots_now.items():
+        for num, slot in scoped_slots(slots_now).items():
             if num == active:
                 continue
             u, w = usage_for_slot(num, slot, models)
@@ -827,6 +933,68 @@ def cmd_auto(args) -> int:
             time.sleep(args.interval)
     except KeyboardInterrupt:
         log("encerrado")
+    return 0
+
+
+def cmd_profile(args) -> int:
+    profiles = load_profiles()
+    slots = load_slots()
+    action = args.action
+
+    if action == "list":
+        current = active_profile()
+        if args.json:
+            print(json.dumps({"active": current, "profiles": profiles}, ensure_ascii=False))
+            return 0
+        if not profiles:
+            print("nenhum perfil — crie com `ccswap profile set NOME CONTA...`")
+            return 0
+        for name, nums in profiles.items():
+            members = ", ".join(f"{n} ({slot_label(slots[n])})" if n in slots else f"{n} (removido)" for n in nums)
+            print(f"{'→' if name == current else ' '} {name}: {members or 'sem contas'}")
+        if current is None:
+            print("  (nenhum ativo: a troca usa todas as contas)")
+        return 0
+
+    if action == "off":
+        set_active_profile(None)
+        print("✓ sem perfil: a troca volta a usar todas as contas")
+        return 0
+
+    if not args.name:
+        die(f"diga o nome do perfil: `ccswap profile {action} NOME`")
+    name = args.name.strip()
+
+    if action == "set":
+        if not args.accounts:
+            die("diga as contas do perfil: `ccswap profile set NOME CONTA...` (slot, e-mail ou apelido)")
+        nums = list(dict.fromkeys(resolve_slot(slots, ref) for ref in args.accounts))
+        save_profiles({**profiles, name: nums})
+        print(f"✓ perfil {name}: {', '.join(slot_label(slots[n]) for n in nums)}")
+        return 0
+
+    if name not in profiles:
+        die(f"perfil não encontrado: {name!r} (veja `ccswap profile`)")
+
+    if action == "delete":
+        del profiles[name]
+        save_profiles(profiles)
+        if read_json(state_path()).get("profile") == name:
+            set_active_profile(None)
+        print(f"✓ perfil {name} apagado")
+        return 0
+
+    # use
+    pool = {n: slots[n] for n in profiles[name] if n in slots}
+    if not pool:
+        die(f"o perfil {name} não tem contas cadastradas")
+    set_active_profile(name)
+    print(f"✓ perfil {name} ativo")
+    if find_active_slot(slots) in pool:
+        return 0
+    target = least_used_slot(pool, None, []) or next(iter(pool))
+    do_switch(target, slots, reason=f"perfil {name}")
+    print("  (vale para o CLI e para a extensão do VS Code — veja `ccswap reload`)")
     return 0
 
 
@@ -944,6 +1112,7 @@ def main(argv: list[str]) -> int:
     li.add_argument("--model", help="também mostra limites semanais por modelo (ex: Fable)")
     li.add_argument("--no-usage", action="store_true", help="não consulta a API")
     li.add_argument("--json", action="store_true", help="saída em JSON (usada pelo mod)")
+    li.add_argument("--all", action="store_true", help="todas as contas, não só as do perfil ativo")
     li.set_defaults(func=cmd_list)
 
     st = sub.add_parser("status", help="mostra a conta ativa")
@@ -954,6 +1123,13 @@ def main(argv: list[str]) -> int:
     sw.add_argument("--best", action="store_true", help="escolhe a de maior folga")
     sw.add_argument("--model", help="considera o limite semanal desse modelo")
     sw.set_defaults(func=cmd_switch)
+
+    pr = sub.add_parser("profile", help="perfis: grupos de contas entre os quais a troca circula")
+    pr.add_argument("action", nargs="?", default="list", choices=["list", "set", "use", "off", "delete"])
+    pr.add_argument("name", nargs="?", help="nome do perfil")
+    pr.add_argument("accounts", nargs="*", help="slots, e-mails ou apelidos (em `set`)")
+    pr.add_argument("--json", action="store_true", help="saída em JSON (usada pelo mod)")
+    pr.set_defaults(func=cmd_profile)
 
     au = sub.add_parser("auto", help="monitora e troca sozinho ao chegar no limite")
     au.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
