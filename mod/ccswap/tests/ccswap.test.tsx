@@ -94,3 +94,57 @@ test('com HTTP 429 mantém a última leitura e usa os limites da sessão', async
     await ui.unmount()
   }
 })
+
+test('perfil ativo aparece na linha de status e /conta perfil troca de perfil', async ($, on) => {
+  const calls: string[][] = []
+  const status: (string | undefined)[] = []
+  let active: string | null = 'empresa'
+  mock.clock(on, { now: NOW })
+  on('command.register', () => ({ value: { command: 'conta' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('ui.status', (_, e) => (status.push(e.text), { value: undefined }))
+  on('process.run', (_, e) => {
+    calls.push([...e.argv])
+    if (e.argv.includes('--json') && e.argv.includes('profile')) {
+      const stdout = JSON.stringify({ active, profiles: { empresa: [1, 2], empresa2: [3] } })
+      return { value: { exitCode: 0, stdout, stderr: '' } }
+    }
+    if (e.argv.includes('use')) {
+      active = 'empresa2'
+      return { value: { exitCode: 0, stdout: '✓ perfil empresa2 ativo\n✓ agora em c@ex.com (slot 3) — perfil empresa2', stderr: '' } }
+    }
+    return { value: { exitCode: 0, stdout: LIST, stderr: '' } }
+  })
+
+  await $.session.start(START)
+  await $.command.run({ command: 'conta', args: '' })
+  expect(status.at(-1)).toContain('ccswap[empresa]: → pessoal')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /perfil empresa/ })).toBeTruthy()
+  await ui.unmount()
+
+  const done = await $.command.run({ command: 'conta', args: 'perfil empresa2' })
+  expect(JSON.stringify(done)).toContain('agora em c@ex.com')
+  expect(calls.some(a => a.includes('profile') && a.includes('use') && a.includes('empresa2'))).toBe(true)
+  expect(status.at(-1)).toContain('ccswap[empresa2]:')
+})
+
+test('leitura antiga do cache do ccswap aparece como última leitura', async ($, on) => {
+  const stale = JSON.stringify([
+    { slot: 1, email: 'a@ex.com', alias: 'pessoal', active: true, usage: { '5h': { pct: 40 } }, usage_age: 900, error: 'HTTP 429' },
+  ])
+  mock.clock(on, { now: NOW })
+  on('command.register', () => ({ value: { command: 'conta' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('ui.status', () => ({ value: undefined }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: stale, stderr: '' } }))
+
+  await $.session.start(START)
+  const listed = await $.command.run({ command: 'conta', args: '' })
+  expect(JSON.stringify(listed)).toContain('5h 40% (última leitura)')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /~/ })).toBeTruthy()
+  await ui.unmount()
+})

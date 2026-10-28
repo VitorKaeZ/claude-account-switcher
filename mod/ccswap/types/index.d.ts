@@ -9,8 +9,13 @@ export type Account = {
   alias: string
   active: boolean
   usage: Usage | null
+  /** Segundos desde a leitura (o ccswap usa um cache compartilhado). */
+  usage_age?: number
   error: string | null
 }
+
+/** Saída de `ccswap profile --json`. */
+export type Profiles = { active: string | null; profiles: Record<string, number[]> }
 
 /**
  * Uma conta como o mod mostra: o uso pode vir da última leitura boa da API
@@ -29,6 +34,8 @@ declare module 'claude-code' {
       isHidden: boolean
       /** O resultado do último botão do painel. */
       lastAction: string | null
+      /** Perfis do ccswap e o ativo (a troca só circula entre as contas dele). */
+      profiles: Profiles | null
     }
   }
 }

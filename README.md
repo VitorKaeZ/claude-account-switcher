@@ -39,8 +39,9 @@ com um token velho.
 ccswap add
 # 2. faça /login com a conta B no Claude Code, depois:
 ccswap add
+# quantas contas quiser (slots 1 a 99): /login com a próxima e `ccswap add`
 
-ccswap list              # as duas contas com uso 5h / 7d e horário do reset
+ccswap list              # as contas com uso 5h / 7d e horário do reset
 ccswap status            # qual está ativa
 ccswap switch            # vai para a próxima
 ccswap switch 2          # por slot
@@ -48,6 +49,27 @@ ccswap switch dev        # por apelido (ccswap alias 2 dev)
 ccswap switch --best     # a que tiver mais folga
 ccswap remove 2
 ```
+
+### Perfis
+
+Um perfil é um grupo de contas. Com um perfil ativo, `switch` (próxima e
+`--best`), `auto`, o serviço e o `list` só enxergam as contas dele:
+
+```bash
+ccswap profile set empresa 1 2        # slots, e-mails ou apelidos
+ccswap profile set empresa2 3
+ccswap profile use empresa            # ativa; se a conta atual não é do perfil,
+                                      # vai para a de maior folga dentro dele
+ccswap profile                        # lista os perfis (→ marca o ativo)
+ccswap profile off                    # volta a usar todas as contas
+ccswap profile delete empresa2
+ccswap list --all                     # todas as contas, ignorando o perfil
+```
+
+O perfil vale para a máquina inteira, como a conta: o login do Claude é um só
+para CLI e VS Code. `ccswap switch <conta>` com o nome explícito aceita
+qualquer conta, mesmo fora do perfil. Perfil de uma conta só não tem para onde
+trocar: o `auto` fica nela até você mudar de perfil.
 
 ### Troca automática
 
@@ -99,7 +121,7 @@ ccswap service uninstall
 próprio Claude (CLI e VS Code), sem precisar ir ao terminal:
 
 ```
-/trocar-conta            # mostra o uso das duas e vai para a próxima
+/trocar-conta            # mostra o uso das contas e vai para a próxima
 /trocar-conta melhor     # vai para a de maior folga
 /trocar-conta 1          # por slot, e-mail ou apelido
 ```
@@ -110,7 +132,7 @@ próprio Claude (CLI e VS Code), sem precisar ir ao terminal:
 
 - **linha de status** embaixo do rodapé, com cada conta, a pior janela e em
   quanto tempo ela reseta quando passa de 75%:
-  `ccswap: → vitorkaez ▰▰▱▱▱ 40%  gabrielfpl40 ▰▰▰▰▱ 80% ↻3h30`. A faixa
+  `ccswap: → vitorkaez ▰▰▱▱▱ 40%  gabrielfpl40 ▰▰▰▰▱ 80% ↻3h30`. Com perfil ativo, o nome dele aparece: `ccswap[empresa]: …`. A faixa
   acima do prompt fica livre para outros mods (o savvy-progress usa ela);
 - **painel Contas** na barra lateral (`/conta painel` abre e fecha): barras
   5h / 7d em verde, amarelo ou vermelho, um botão `usar` em cada conta
@@ -132,6 +154,7 @@ próprio Claude (CLI e VS Code), sem precisar ir ao terminal:
   /conta melhor       # vai para a de maior folga
   /conta 2            # por slot, e-mail ou apelido
   /conta auto         # uma checagem do auto agora
+  /conta perfil       # lista os perfis; /conta perfil empresa ativa, /conta perfil off desliga
   /conta ocultar      # esconde a linha de status (/conta mostrar traz de volta)
   ```
 
@@ -167,7 +190,9 @@ Testes do mod: `claude plugin test mod/ccswap`.
 `~/.local/share/ccswap/` (modo `0700`):
 
 - `slots/N.json` — `{email, alias, credentials, account}` de cada conta, `0600`
-- `state.json` — slot ativo, horário da última troca
+- `state.json` — slot ativo, perfil ativo, horário da última troca
+- `profiles.json` — `{nome: [slots]}` de cada perfil
+- `usage.json` — última leitura de uso de cada conta (cache compartilhado)
 
 São tokens OAuth em texto claro, com as mesmas permissões que o próprio Claude
 Code usa em `~/.claude/.credentials.json`. Não versione essa pasta.
@@ -180,6 +205,12 @@ Code usa em `~/.claude/.credentials.json`. Não versione essa pasta.
   rode `ccswap add` de novo para atualizar o slot.
 - Não rode `/logout` para trocar de conta — o Claude Code pode revogar o
   refresh token guardado. Use `/login` direto, ou o próprio `ccswap switch`.
+- A API de uso aceita mais ou menos **uma leitura a cada 2 min por conta**
+  (medido; o `Retry-After` do HTTP 429 vem `0`). O ccswap guarda cada leitura
+  em `usage.json` e todos os processos (serviço, mod em cada sessão, CLI)
+  usam esse cache: só consulta de novo depois de 150 s, e depois de um 429
+  espera mais 150 s mostrando a última leitura boa (até 30 min). O
+  `ccremote` ainda consulta por conta própria e disputa a mesma cota.
 - A API de uso (`/api/oauth/usage`) não é pública nem documentada; se a
   Anthropic mudar o formato, o `list`/`auto` param de ler o uso (a troca
   manual continua funcionando).
