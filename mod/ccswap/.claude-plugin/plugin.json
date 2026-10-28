@@ -1,6 +1,6 @@
 {
   "name": "ccswap",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Mostra o uso das contas do ccswap na linha de status e num painel com botões, adiciona /conta e troca sozinho perto do limite",
   "types": "./types/index.d.ts",
   "userConfig": {

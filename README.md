@@ -132,7 +132,8 @@ próprio Claude (CLI e VS Code), sem precisar ir ao terminal:
 
 - **linha de status** embaixo do rodapé, com cada conta, a pior janela e em
   quanto tempo ela reseta quando passa de 75%:
-  `ccswap: → vitorkaez ▰▰▱▱▱ 40%  gabrielfpl40 ▰▰▰▰▱ 80% ↻3h30`. Com perfil ativo, o nome dele aparece: `ccswap[empresa]: …`. A faixa
+  `→ vitorkaez ▰▰▱▱▱ 40%  gabrielfpl40 ▰▰▰▰▱ 80% ↻3h30` (o Claude Code põe
+  `ccswap:` na frente). Com perfil ativo, o nome dele vem antes: `[empresa] → …`. A faixa
   acima do prompt fica livre para outros mods (o savvy-progress usa ela);
 - **painel Contas** na barra lateral (`/conta painel` abre e fecha): barras
   5h / 7d em verde, amarelo ou vermelho, um botão `usar` em cada conta

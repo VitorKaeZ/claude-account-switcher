@@ -46,7 +46,7 @@ test('linha de status, painel com uso e reset, e o botão usar troca de conta', 
 
   const listed = await $.command.run({ command: 'conta', args: '' })
   expect(JSON.stringify(listed)).toContain('7d 80% ↻3h30')
-  expect(status.at(-1)).toBe('ccswap: → pessoal ▰▰▱▱▱ 40%  b ▰▰▰▰▱ 80% ↻3h30')
+  expect(status.at(-1)).toBe('→ pessoal ▰▰▱▱▱ 40%  b ▰▰▰▰▱ 80% ↻3h30')
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
@@ -118,7 +118,7 @@ test('perfil ativo aparece na linha de status e /conta perfil troca de perfil', 
 
   await $.session.start(START)
   await $.command.run({ command: 'conta', args: '' })
-  expect(status.at(-1)).toContain('ccswap[empresa]: → pessoal')
+  expect(status.at(-1)).toBe('[empresa] → pessoal ▰▰▱▱▱ 40%  b ▰▰▰▰▱ 80% ↻3h30')
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /perfil empresa/ })).toBeTruthy()
@@ -127,7 +127,7 @@ test('perfil ativo aparece na linha de status e /conta perfil troca de perfil', 
   const done = await $.command.run({ command: 'conta', args: 'perfil empresa2' })
   expect(JSON.stringify(done)).toContain('agora em c@ex.com')
   expect(calls.some(a => a.includes('profile') && a.includes('use') && a.includes('empresa2'))).toBe(true)
-  expect(status.at(-1)).toContain('ccswap[empresa2]:')
+  expect(status.at(-1)).toMatch(/^\[empresa2\] /)
 })
 
 test('leitura antiga do cache do ccswap aparece como última leitura', async ($, on) => {

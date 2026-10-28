@@ -58,6 +58,7 @@ DEFAULT_MARGIN = 10.0  # histerese: o alvo precisa estar X pontos melhor
 # Retry-After do 429 vem 0). Serviço, mods e CLI dividem esse cache.
 USAGE_MIN_AGE = 150.0
 USAGE_MAX_STALE = 1800.0  # leitura mais velha que isso não vale como uso
+USAGE_MAX_BACKOFF = 1800.0  # cada 429 seguido dobra a espera até aqui
 
 # ---------------------------------------------------------------------------
 # Caminhos
@@ -453,7 +454,8 @@ def fetch_usage(access_token: str, timeout: float = 8.0) -> tuple[dict | None, s
 
 def read_usage(email: str, access_token: str) -> tuple[dict | None, str]:
     """Uso da conta pelo cache compartilhado; só consulta a API quando a
-    última leitura passou de USAGE_MIN_AGE e não há 429 recente.
+    última leitura passou de USAGE_MIN_AGE e não há 429 recente (a espera
+    dobra a cada 429 seguido). O ccremote lê e grava o mesmo arquivo.
 
     O uso devolvido traz "read_at" (epoch da leitura). Se a consulta falha,
     devolve a última leitura boa (até USAGE_MAX_STALE) com o motivo.
@@ -468,7 +470,9 @@ def read_usage(email: str, access_token: str) -> tuple[dict | None, str]:
         if usage:
             entry = {"usage": usage, "at": now}
         elif why == "HTTP 429":
-            entry = {**entry, "blocked_until": now + USAGE_MIN_AGE, "error": why}
+            strikes = entry.get("strikes", 0) + 1
+            wait = min(USAGE_MIN_AGE * 2 ** (strikes - 1), USAGE_MAX_BACKOFF)
+            entry = {**entry, "blocked_until": now + wait, "error": why, "strikes": strikes}
         else:
             return None, why
         cache = read_json(usage_cache_path())

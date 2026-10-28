@@ -250,14 +250,15 @@ function statusLine(
     const resetIn = worst.pct >= WARNING_PCT ? formatIn(worst.resets_at, now) : null
     return `${a.active ? '→ ' : ''}${shortName(a)} ${full}${empty} ${worst.pct.toFixed(0)}%${resetIn ? ` ↻${resetIn}` : ''}${SOURCE_MARK[source ?? ''] ?? ''}`
   })
-  return `ccswap${profile ? `[${profile}]` : ''}: ${parts.join('  ')}${error ? '  ⚠ ccswap não respondeu' : ''}`
+  // O Claude Code já desenha o nome do mod na frente da linha.
+  return `${profile ? `[${profile}] ` : ''}${parts.join('  ')}${error ? '  ⚠ ccswap não respondeu' : ''}`
 }
 
 async function syncStatus($: EngineInterface) {
   const list = await read($, accounts)
   const error = await read($, lastError)
   if (await read($, isHidden)) return $.ui.status(undefined)
-  if (!list || list.length === 0) return $.ui.status(error ? `ccswap: ${error}` : undefined)
+  if (!list || list.length === 0) return $.ui.status(error ?? undefined)
   const profile = (await read($, profiles))?.active ?? null
   $.ui.status(statusLine(list, await read($, liveUsage), await $.clock.now(), error, profile))
 }
